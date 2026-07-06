@@ -15,7 +15,7 @@ The app shows:
 - model-specific usage windows when Codex returns them
 - reset timing for each usage window
 - banked bonus/reset credits and how many days remain before expiry
-- dark compact UI
+- dark wide two-column UI designed to avoid scrolling in normal use
 - always-on-top by default, with an in-window toggle
 - optional launch on Windows startup
 

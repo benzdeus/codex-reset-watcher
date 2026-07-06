@@ -51,6 +51,12 @@ $script:StartupRunName = "Codex Reset Watcher"
 $script:StartupRunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $script:SettingsDir = Join-Path $env:APPDATA "Codex Reset Watcher"
 $script:SettingsPath = Join-Path $script:SettingsDir "settings.json"
+$script:WindowWidth = 820
+$script:WindowHeight = 760
+$script:PageMargin = 16
+$script:ColumnGap = 12
+$script:FullWidth = 788
+$script:ColumnWidth = 388
 
 function New-Color {
     param([int]$Hex)
@@ -867,10 +873,17 @@ function Set-DarkTitleBar {
 }
 
 function Add-Card {
-    param([int]$Y, [int]$Height, [System.Drawing.Color]$BackColor, [System.Drawing.Color]$BorderColor)
+    param(
+        [int]$Y,
+        [int]$Height,
+        [System.Drawing.Color]$BackColor,
+        [System.Drawing.Color]$BorderColor,
+        [int]$X = $script:PageMargin,
+        [int]$Width = $script:FullWidth
+    )
     $panel = New-Object System.Windows.Forms.Panel
-    $panel.Location = New-Object System.Drawing.Point(14, $Y)
-    $panel.Size = New-Object System.Drawing.Size(392, $Height)
+    $panel.Location = New-Object System.Drawing.Point($X, $Y)
+    $panel.Size = New-Object System.Drawing.Size($Width, $Height)
     $panel.BackColor = $BackColor
     Add-Border $panel $BorderColor
     $script:Content.Controls.Add($panel)
@@ -914,70 +927,90 @@ function Render-State {
     $script:Content.SuspendLayout()
     $script:Content.Controls.Clear()
 
-    $y = 14
+    $y = $script:PageMargin
     $header = Add-Card $y 100 $script:Palette.Card $script:Palette.Border
-    Add-Label $header "Codex bonus resets" 14 10 210 28 13 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
+    Add-Label $header "Codex Reset Watcher" 16 10 260 28 13 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
     $checked = "Not checked yet"
     if ($State.LastChecked) {
         $checked = "Last checked " + ([datetime]$State.LastChecked).ToString("h:mm tt", [System.Globalization.CultureInfo]::GetCultureInfo("en-US"))
     }
-    Add-Label $header $checked 14 38 220 20 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
-    Add-Label $header "Active: $($State.AccountLabel)" 14 62 245 20 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
-    Add-Label $header ([string]$State.AvailableCount) 284 16 86 34 22 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
+    Add-Label $header $checked 16 38 260 20 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
+    Add-Label $header "Active: $($State.AccountLabel)" 16 62 460 20 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
+    Add-Label $header ([string]$State.AvailableCount) 642 16 110 34 22 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
     $unit = "bonuses"
     if ($State.AvailableCount -eq 1) { $unit = "bonus" }
-    Add-Label $header $unit 274 52 96 20 9 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
+    Add-Label $header $unit 642 52 110 20 9 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
     $y += 112
 
     if ($State.UsageWindows -and @($State.UsageWindows).Count -gt 0) {
         Add-Label $script:Content "Usage limits" 16 $y 180 22 9 ([System.Drawing.FontStyle]::Bold) $script:Palette.Muted | Out-Null
         $y += 28
+        $usageIndex = 0
         foreach ($window in $State.UsageWindows) {
             $tone = Get-UsageTone $window.RemainingPercent
-            $usageCard = Add-Card $y 88 $script:Palette.Card $script:Palette.Border
+            $column = $usageIndex % 2
+            $row = [int][math]::Floor($usageIndex / 2)
+            $cardX = $script:PageMargin + ($column * ($script:ColumnWidth + $script:ColumnGap))
+            $cardY = $y + ($row * 100)
+            $usageCard = Add-Card $cardY 88 $script:Palette.Card $script:Palette.Border $cardX $script:ColumnWidth
             Add-Label $usageCard $window.Title 14 10 250 22 9.5 ([System.Drawing.FontStyle]::Bold) $script:Palette.Muted | Out-Null
             $remainingText = if ($null -eq $window.RemainingPercent) { "Unknown remaining" } else { "$($window.RemainingPercent)% remaining" }
             Add-Label $usageCard $remainingText 14 31 170 28 14 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
             Add-Meter $usageCard 14 62 360 $window.RemainingPercent $tone
-            Add-Label $usageCard (Format-UsageReset $window.ResetDate) 210 32 164 22 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
-            $y += 100
+            Add-Label $usageCard (Format-UsageReset $window.ResetDate) 206 32 168 22 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
+            $usageIndex += 1
         }
+        $usageRows = [math]::Ceiling(@($State.UsageWindows).Count / 2)
+        $y += ([int]$usageRows * 100)
     }
 
     if ($State.UsageError) {
         $usageErrorCard = Add-Card $y 58 $script:Palette.AmberTint $script:Palette.Amber
-        Add-Label $usageErrorCard $State.UsageError 14 10 360 36 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Text | Out-Null
+        Add-Label $usageErrorCard $State.UsageError 14 10 740 36 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Text | Out-Null
         $y += 70
     }
 
+    Add-Label $script:Content "Bonus resets" 16 $y 180 22 9 ([System.Drawing.FontStyle]::Bold) $script:Palette.Muted | Out-Null
+    $y += 28
+
     if ($State.Error) {
         $errorCard = Add-Card $y 70 $script:Palette.AmberTint $script:Palette.Amber
-        Add-Label $errorCard $State.Error 14 12 360 44 9 ([System.Drawing.FontStyle]::Regular) $script:Palette.Text | Out-Null
+        Add-Label $errorCard $State.Error 14 12 740 44 9 ([System.Drawing.FontStyle]::Regular) $script:Palette.Text | Out-Null
         $y += 82
     } elseif ($State.AvailableCount -eq 0) {
         $empty = Add-Card $y 58 $script:Palette.Card $script:Palette.Border
-        Add-Label $empty "No banked bonus resets" 14 12 250 28 10 ([System.Drawing.FontStyle]::Bold) $script:Palette.Muted | Out-Null
+        Add-Label $empty "No banked bonus resets" 14 12 500 28 10 ([System.Drawing.FontStyle]::Bold) $script:Palette.Muted | Out-Null
         $y += 70
     } else {
         $index = 1
         foreach ($credit in $State.Credits) {
             $tone = Get-Tone $credit.ExpiresAt
-            $card = Add-Card $y 72 (Get-Background $credit.ExpiresAt) $tone
+            $zeroIndex = $index - 1
+            $column = $zeroIndex % 2
+            $row = [int][math]::Floor($zeroIndex / 2)
+            $cardX = $script:PageMargin + ($column * ($script:ColumnWidth + $script:ColumnGap))
+            $cardY = $y + ($row * 82)
+            $card = Add-Card $cardY 72 (Get-Background $credit.ExpiresAt) $tone $cardX $script:ColumnWidth
             Add-Label $card "Bonus $index" 14 10 130 24 10 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
             Add-Label $card (Format-Expiry $credit.ExpiresAt) 14 36 210 22 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
             Add-Label $card (Format-DaysLeft $credit.ExpiresAt) 222 17 150 30 12 ([System.Drawing.FontStyle]::Bold) $tone ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
-            $y += 82
             $index += 1
         }
 
         while ($index -le $State.AvailableCount) {
-            $card = Add-Card $y 64 $script:Palette.Card $script:Palette.Border
+            $zeroIndex = $index - 1
+            $column = $zeroIndex % 2
+            $row = [int][math]::Floor($zeroIndex / 2)
+            $cardX = $script:PageMargin + ($column * ($script:ColumnWidth + $script:ColumnGap))
+            $cardY = $y + ($row * 82)
+            $card = Add-Card $cardY 64 $script:Palette.Card $script:Palette.Border $cardX $script:ColumnWidth
             Add-Label $card "Bonus $index" 14 10 130 22 10 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
             Add-Label $card "Codex did not return an expiry date." 14 34 210 20 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
             Add-Label $card "expiry unavailable" 214 18 160 24 10 ([System.Drawing.FontStyle]::Bold) $script:Palette.Muted ([System.Drawing.ContentAlignment]::MiddleRight) | Out-Null
-            $y += 74
             $index += 1
         }
+        $bonusRows = [math]::Ceiling($State.AvailableCount / 2)
+        $y += ([int]$bonusRows * 82)
     }
 
     $settings = Add-Card $y 98 $script:Palette.Card $script:Palette.Border
@@ -1041,7 +1074,7 @@ function Render-State {
 
     $refresh = New-Object System.Windows.Forms.Button
     $refresh.Text = "Refresh"
-    $refresh.Location = New-Object System.Drawing.Point(14, $y)
+    $refresh.Location = New-Object System.Drawing.Point($script:PageMargin, $y)
     $refresh.Size = New-Object System.Drawing.Size(90, 30)
     Set-ModernButton $refresh $true
     $refresh.Add_Click({ Refresh-State })
@@ -1049,7 +1082,8 @@ function Render-State {
 
     $hide = New-Object System.Windows.Forms.Button
     $hide.Text = "Hide"
-    $hide.Location = New-Object System.Drawing.Point(218, $y)
+    $hideX = $script:PageMargin + $script:FullWidth - 188
+    $hide.Location = New-Object System.Drawing.Point($hideX, $y)
     $hide.Size = New-Object System.Drawing.Size(84, 30)
     Set-ModernButton $hide
     $hide.Add_Click({ $script:Form.Hide() })
@@ -1057,7 +1091,8 @@ function Render-State {
 
     $quit = New-Object System.Windows.Forms.Button
     $quit.Text = "Quit"
-    $quit.Location = New-Object System.Drawing.Point(316, $y)
+    $quitX = $script:PageMargin + $script:FullWidth - 90
+    $quit.Location = New-Object System.Drawing.Point($quitX, $y)
     $quit.Size = New-Object System.Drawing.Size(90, 30)
     Set-ModernButton $quit
     $quit.Add_Click({
@@ -1068,8 +1103,7 @@ function Render-State {
     $script:Content.Controls.Add($quit)
     $y += 44
 
-    $scrollHeight = $y + 12
-    $script:Content.AutoScrollMinSize = New-Object System.Drawing.Size(0, $scrollHeight)
+    $script:Content.AutoScrollMinSize = New-Object System.Drawing.Size(0, 0)
     $script:Content.ResumeLayout()
     $script:IsRendering = $false
 
@@ -1095,8 +1129,8 @@ function Show-Popup {
 
     $screen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position)
     $area = $screen.WorkingArea
-    $width = [math]::Min(430, $area.Width - 24)
-    $height = [math]::Min(520, $area.Height - 24)
+    $width = [math]::Min($script:WindowWidth, $area.Width - 24)
+    $height = [math]::Min($script:WindowHeight, $area.Height - 24)
     $script:Form.Size = New-Object System.Drawing.Size($width, $height)
     $left = $area.Right - $width - 10
     $top = $area.Bottom - $height - 10
@@ -1136,7 +1170,7 @@ function Initialize-App {
 
     $script:Content = New-Object System.Windows.Forms.Panel
     $script:Content.Dock = [System.Windows.Forms.DockStyle]::Fill
-    $script:Content.AutoScroll = $true
+    $script:Content.AutoScroll = $false
     $script:Content.BackColor = $script:Palette.Background
     $script:Form.Controls.Add($script:Content)
 
@@ -1173,7 +1207,7 @@ function Test-UiRender {
     $script:Form = New-Object System.Windows.Forms.Form
     $script:Content = New-Object System.Windows.Forms.Panel
     $script:Content.Dock = [System.Windows.Forms.DockStyle]::Fill
-    $script:Content.AutoScroll = $true
+    $script:Content.AutoScroll = $false
     $script:Form.Controls.Add($script:Content)
 
     $script:State = [pscustomobject]@{
