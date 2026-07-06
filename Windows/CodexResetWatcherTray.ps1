@@ -466,6 +466,27 @@ function Get-UsagePrefixFromPath {
     return $null
 }
 
+function Get-UsagePrefixFromNode {
+    param([object]$Node)
+
+    $candidates = @(
+        "model_slug", "modelSlug", "model", "model_name", "modelName",
+        "model_id", "modelId", "sku", "name", "title", "display_name", "displayName"
+    )
+
+    foreach ($candidate in $candidates) {
+        $value = ConvertTo-Text (Get-JsonValue $Node @($candidate))
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            continue
+        }
+        if ($value -match "gpt|codex|spark") {
+            return Format-UsagePrefix $value
+        }
+    }
+
+    return $null
+}
+
 function Convert-UsageWindow {
     param(
         [object]$Window,
@@ -529,7 +550,8 @@ function Find-UsageWindows {
         [object]$Node,
         [string[]]$Path,
         [System.Collections.ArrayList]$Displays,
-        [System.Collections.Hashtable]$Seen
+        [System.Collections.Hashtable]$Seen,
+        [string]$InheritedPrefix = $null
     )
 
     if ($null -eq $Node) {
@@ -538,7 +560,7 @@ function Find-UsageWindows {
 
     if ($Node -is [System.Array]) {
         foreach ($item in $Node) {
-            Find-UsageWindows $item $Path $Displays $Seen
+            Find-UsageWindows $item $Path $Displays $Seen $InheritedPrefix
         }
         return
     }
@@ -548,6 +570,12 @@ function Find-UsageWindows {
         return
     }
 
+    $nodePrefix = Get-UsagePrefixFromNode $Node
+    $resolvedPrefix = $InheritedPrefix
+    if (-not [string]::IsNullOrWhiteSpace($nodePrefix)) {
+        $resolvedPrefix = $nodePrefix
+    }
+
     $hasWindowShape = $null -ne (Get-JsonValue $Node @("limit_window_seconds", "limitWindowSeconds")) -and
         (
             $null -ne (Get-JsonValue $Node @("used_percent", "usedPercent")) -or
@@ -555,12 +583,17 @@ function Find-UsageWindows {
         )
 
     if ($hasWindowShape) {
-        Add-UsageDisplay $Displays $Seen $Node $null (Get-UsagePrefixFromPath $Path)
+        $pathPrefix = Get-UsagePrefixFromPath $Path
+        $prefix = $resolvedPrefix
+        if ([string]::IsNullOrWhiteSpace($prefix)) {
+            $prefix = $pathPrefix
+        }
+        Add-UsageDisplay $Displays $Seen $Node $null $prefix
     }
 
     foreach ($property in $properties) {
         $nextPath = @($Path + $property.Name)
-        Find-UsageWindows $property.Value $nextPath $Displays $Seen
+        Find-UsageWindows $property.Value $nextPath $Displays $Seen $resolvedPrefix
     }
 }
 
@@ -1204,6 +1237,24 @@ function Initialize-App {
 }
 
 function Test-UiRender {
+    $parserFixture = [pscustomobject]@{
+        models = @(
+            [pscustomobject]@{
+                model_slug = "gpt-5.3-codex-spark"
+                windows = @(
+                    [pscustomobject]@{
+                        used_percent = 0
+                        limit_window_seconds = 18000
+                    }
+                )
+            }
+        )
+    }
+    $parsedWindows = @(Convert-UsageDisplays $parserFixture)
+    if (-not ($parsedWindows | Where-Object { $_.Title -eq "GPT-5.3-Codex-Spark 5 hour usage limit" })) {
+        throw "Model-specific usage title was not preserved."
+    }
+
     $script:Form = New-Object System.Windows.Forms.Form
     $script:Content = New-Object System.Windows.Forms.Panel
     $script:Content.Dock = [System.Windows.Forms.DockStyle]::Fill
