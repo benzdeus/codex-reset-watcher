@@ -44,6 +44,9 @@ $script:UsageEndpoint = "https://chatgpt.com/backend-api/wham/usage"
 $script:State = $null
 $script:Form = $null
 $script:Content = $null
+$script:UsageContent = $null
+$script:SettingsContent = $null
+$script:Tabs = $null
 $script:NotifyIcon = $null
 $script:IsQuitting = $false
 $script:IsRendering = $false
@@ -471,7 +474,8 @@ function Get-UsagePrefixFromNode {
 
     $candidates = @(
         "model_slug", "modelSlug", "model", "model_name", "modelName",
-        "model_id", "modelId", "sku", "name", "title", "display_name", "displayName"
+        "model_id", "modelId", "sku", "slug", "key", "bucket", "bucket_name", "bucketName",
+        "dimension", "group", "name", "title", "display_name", "displayName"
     )
 
     foreach ($candidate in $candidates) {
@@ -485,6 +489,29 @@ function Get-UsagePrefixFromNode {
     }
 
     return $null
+}
+
+function Apply-KnownModelDuplicateLabels {
+    param([object[]]$Displays)
+
+    $seenTitles = @{}
+    foreach ($display in $Displays) {
+        if ($null -eq $display -or [string]::IsNullOrWhiteSpace($display.Title)) {
+            continue
+        }
+
+        $title = [string]$display.Title
+        if (-not $seenTitles.ContainsKey($title)) {
+            $seenTitles[$title] = 0
+        }
+        $seenTitles[$title] += 1
+
+        if ($seenTitles[$title] -gt 1 -and $title -notmatch "GPT|Codex|Spark") {
+            $display.Title = "GPT-5.3-Codex-Spark $title"
+        }
+    }
+
+    return $Displays
 }
 
 function Convert-UsageWindow {
@@ -619,7 +646,7 @@ function Convert-UsageDisplays {
     }
 
     Find-UsageWindows $Response @() $displays $seen
-    return @($displays)
+    return @(Apply-KnownModelDuplicateLabels @($displays))
 }
 
 function Get-DaysLeft {
@@ -912,14 +939,15 @@ function Add-Card {
         [System.Drawing.Color]$BackColor,
         [System.Drawing.Color]$BorderColor,
         [int]$X = $script:PageMargin,
-        [int]$Width = $script:FullWidth
+        [int]$Width = $script:FullWidth,
+        [System.Windows.Forms.Control]$Parent = $script:Content
     )
     $panel = New-Object System.Windows.Forms.Panel
     $panel.Location = New-Object System.Drawing.Point($X, $Y)
     $panel.Size = New-Object System.Drawing.Size($Width, $Height)
     $panel.BackColor = $BackColor
     Add-Border $panel $BorderColor
-    $script:Content.Controls.Add($panel)
+    $Parent.Controls.Add($panel)
     return $panel
 }
 
@@ -1046,65 +1074,6 @@ function Render-State {
         $y += ([int]$bonusRows * 82)
     }
 
-    $settings = Add-Card $y 98 $script:Palette.Card $script:Palette.Border
-    Add-Label $settings "Window settings" 14 8 180 20 9 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
-
-    $alwaysOnTop = New-Object System.Windows.Forms.CheckBox
-    $alwaysOnTop.Text = "Always on top"
-    $alwaysOnTop.Location = New-Object System.Drawing.Point(14, 34)
-    $alwaysOnTop.Size = New-Object System.Drawing.Size(160, 24)
-    $alwaysOnTop.Font = New-Font 9 ([System.Drawing.FontStyle]::Regular)
-    $alwaysOnTop.ForeColor = $script:Palette.Text
-    $alwaysOnTop.BackColor = [System.Drawing.Color]::Transparent
-    $alwaysOnTop.Checked = Get-AlwaysOnTopEnabled
-    $alwaysOnTop.Add_CheckedChanged({
-        param($sender, $eventArgs)
-        if ($script:IsRendering) { return }
-        try {
-            Set-AlwaysOnTopEnabled $sender.Checked
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Could not update always-on-top setting. $($_.Exception.Message)",
-                "Codex Reset Watcher",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            ) | Out-Null
-            $script:IsRendering = $true
-            $sender.Checked = -not $sender.Checked
-            $script:IsRendering = $false
-        }
-    })
-    $settings.Controls.Add($alwaysOnTop)
-
-    $startup = New-Object System.Windows.Forms.CheckBox
-    $startup.Text = "Open when Windows starts"
-    $startup.Location = New-Object System.Drawing.Point(190, 34)
-    $startup.Size = New-Object System.Drawing.Size(190, 24)
-    $startup.Font = New-Font 9 ([System.Drawing.FontStyle]::Regular)
-    $startup.ForeColor = $script:Palette.Text
-    $startup.BackColor = [System.Drawing.Color]::Transparent
-    $startup.Checked = Get-StartupEnabled
-    $startup.Add_CheckedChanged({
-        param($sender, $eventArgs)
-        if ($script:IsRendering) { return }
-        try {
-            Set-StartupEnabled $sender.Checked
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Could not update Windows startup setting. $($_.Exception.Message)",
-                "Codex Reset Watcher",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            ) | Out-Null
-            $script:IsRendering = $true
-            $sender.Checked = -not $sender.Checked
-            $script:IsRendering = $false
-        }
-    })
-    $settings.Controls.Add($startup)
-    Add-Label $settings "Startup uses the current-user Run entry. No admin needed." 14 66 350 18 8 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
-    $y += 110
-
     $refresh = New-Object System.Windows.Forms.Button
     $refresh.Text = "Refresh"
     $refresh.Location = New-Object System.Drawing.Point($script:PageMargin, $y)
@@ -1147,18 +1116,95 @@ function Render-State {
     }
 }
 
+function Render-Settings {
+    if ($null -eq $script:SettingsContent) { return }
+
+    $script:IsRendering = $true
+    $script:SettingsContent.SuspendLayout()
+    $script:SettingsContent.Controls.Clear()
+
+    $y = $script:PageMargin
+    $settings = Add-Card $y 160 $script:Palette.Card $script:Palette.Border $script:PageMargin $script:FullWidth $script:SettingsContent
+    Add-Label $settings "Settings" 16 14 180 24 12 ([System.Drawing.FontStyle]::Bold) $script:Palette.Text | Out-Null
+    Add-Label $settings "Control how the watcher window behaves on this Windows user account." 16 40 620 20 8.5 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
+
+    $alwaysOnTop = New-Object System.Windows.Forms.CheckBox
+    $alwaysOnTop.Text = "Always on top"
+    $alwaysOnTop.Location = New-Object System.Drawing.Point(16, 72)
+    $alwaysOnTop.Size = New-Object System.Drawing.Size(180, 24)
+    $alwaysOnTop.Font = New-Font 9 ([System.Drawing.FontStyle]::Regular)
+    $alwaysOnTop.ForeColor = $script:Palette.Text
+    $alwaysOnTop.BackColor = [System.Drawing.Color]::Transparent
+    $alwaysOnTop.Checked = Get-AlwaysOnTopEnabled
+    $alwaysOnTop.Add_CheckedChanged({
+        param($sender, $eventArgs)
+        if ($script:IsRendering) { return }
+        try {
+            Set-AlwaysOnTopEnabled $sender.Checked
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Could not update always-on-top setting. $($_.Exception.Message)",
+                "Codex Reset Watcher",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            ) | Out-Null
+            $script:IsRendering = $true
+            $sender.Checked = -not $sender.Checked
+            $script:IsRendering = $false
+        }
+    })
+    $settings.Controls.Add($alwaysOnTop)
+
+    $startup = New-Object System.Windows.Forms.CheckBox
+    $startup.Text = "Open when Windows starts"
+    $startup.Location = New-Object System.Drawing.Point(16, 104)
+    $startup.Size = New-Object System.Drawing.Size(230, 24)
+    $startup.Font = New-Font 9 ([System.Drawing.FontStyle]::Regular)
+    $startup.ForeColor = $script:Palette.Text
+    $startup.BackColor = [System.Drawing.Color]::Transparent
+    $startup.Checked = Get-StartupEnabled
+    $startup.Add_CheckedChanged({
+        param($sender, $eventArgs)
+        if ($script:IsRendering) { return }
+        try {
+            Set-StartupEnabled $sender.Checked
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Could not update Windows startup setting. $($_.Exception.Message)",
+                "Codex Reset Watcher",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            ) | Out-Null
+            $script:IsRendering = $true
+            $sender.Checked = -not $sender.Checked
+            $script:IsRendering = $false
+        }
+    })
+    $settings.Controls.Add($startup)
+    Add-Label $settings "Startup uses the current-user Run entry. No admin needed." 280 104 420 22 8 ([System.Drawing.FontStyle]::Regular) $script:Palette.Muted | Out-Null
+
+    $script:SettingsContent.ResumeLayout()
+    $script:IsRendering = $false
+}
+
+function Render-All {
+    param([object]$State)
+    Render-State $State
+    Render-Settings
+}
+
 function Refresh-State {
     if ($script:Form) { $script:Form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor }
     $script:State = Get-State
     if ($script:Form) { $script:Form.Cursor = [System.Windows.Forms.Cursors]::Default }
-    Render-State $script:State
+    Render-All $script:State
 }
 
 function Show-Popup {
     if ($null -eq $script:State) {
         $script:State = New-InitialState
     }
-    Render-State $script:State
+    Render-All $script:State
 
     $screen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position)
     $area = $screen.WorkingArea
@@ -1201,11 +1247,38 @@ function Initialize-App {
         }
     })
 
-    $script:Content = New-Object System.Windows.Forms.Panel
-    $script:Content.Dock = [System.Windows.Forms.DockStyle]::Fill
-    $script:Content.AutoScroll = $false
-    $script:Content.BackColor = $script:Palette.Background
-    $script:Form.Controls.Add($script:Content)
+    $script:Tabs = New-Object System.Windows.Forms.TabControl
+    $script:Tabs.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $script:Tabs.Font = New-Font 9 ([System.Drawing.FontStyle]::Regular)
+    $script:Tabs.BackColor = $script:Palette.Background
+    $script:Tabs.ForeColor = $script:Palette.Text
+
+    $usagePage = New-Object System.Windows.Forms.TabPage
+    $usagePage.Text = "Usage"
+    $usagePage.BackColor = $script:Palette.Background
+    $usagePage.ForeColor = $script:Palette.Text
+
+    $settingsPage = New-Object System.Windows.Forms.TabPage
+    $settingsPage.Text = "Settings"
+    $settingsPage.BackColor = $script:Palette.Background
+    $settingsPage.ForeColor = $script:Palette.Text
+
+    $script:UsageContent = New-Object System.Windows.Forms.Panel
+    $script:UsageContent.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $script:UsageContent.AutoScroll = $false
+    $script:UsageContent.BackColor = $script:Palette.Background
+    $usagePage.Controls.Add($script:UsageContent)
+
+    $script:SettingsContent = New-Object System.Windows.Forms.Panel
+    $script:SettingsContent.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $script:SettingsContent.AutoScroll = $false
+    $script:SettingsContent.BackColor = $script:Palette.Background
+    $settingsPage.Controls.Add($script:SettingsContent)
+
+    [void]$script:Tabs.TabPages.Add($usagePage)
+    [void]$script:Tabs.TabPages.Add($settingsPage)
+    $script:Form.Controls.Add($script:Tabs)
+    $script:Content = $script:UsageContent
 
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
     $open = $menu.Items.Add("Open")
@@ -1255,11 +1328,33 @@ function Test-UiRender {
         throw "Model-specific usage title was not preserved."
     }
 
+    $duplicateFixture = [pscustomobject]@{
+        rate_limit = [pscustomobject]@{
+            primary_window = [pscustomobject]@{ used_percent = 77; limit_window_seconds = 18000 }
+            secondary_window = [pscustomobject]@{ used_percent = 83; limit_window_seconds = 604800 }
+        }
+        extra_windows = @(
+            [pscustomobject]@{ used_percent = 0; limit_window_seconds = 18000 },
+            [pscustomobject]@{ used_percent = 0; limit_window_seconds = 604800 }
+        )
+    }
+    $duplicateWindows = @(Convert-UsageDisplays $duplicateFixture)
+    if (-not ($duplicateWindows | Where-Object { $_.Title -eq "GPT-5.3-Codex-Spark 5 hour usage limit" })) {
+        throw "Duplicate 5 hour usage window was not labeled with Codex Spark model."
+    }
+    if (-not ($duplicateWindows | Where-Object { $_.Title -eq "GPT-5.3-Codex-Spark Weekly usage limit" })) {
+        throw "Duplicate weekly usage window was not labeled with Codex Spark model."
+    }
+
     $script:Form = New-Object System.Windows.Forms.Form
-    $script:Content = New-Object System.Windows.Forms.Panel
-    $script:Content.Dock = [System.Windows.Forms.DockStyle]::Fill
-    $script:Content.AutoScroll = $false
-    $script:Form.Controls.Add($script:Content)
+    $script:UsageContent = New-Object System.Windows.Forms.Panel
+    $script:UsageContent.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $script:UsageContent.AutoScroll = $false
+    $script:Form.Controls.Add($script:UsageContent)
+    $script:Content = $script:UsageContent
+
+    $script:SettingsContent = New-Object System.Windows.Forms.Panel
+    $script:SettingsContent.Dock = [System.Windows.Forms.DockStyle]::Fill
 
     $script:State = [pscustomobject]@{
         AccountLabel = "test@example.com"
@@ -1277,11 +1372,13 @@ function Test-UiRender {
         )
         Error = $null
     }
-    Render-State $script:State
-    $count = $script:Content.Controls.Count
+    Render-All $script:State
+    $count = $script:Content.Controls.Count + $script:SettingsContent.Controls.Count
     $script:Form.Dispose()
     $script:Form = $null
     $script:Content = $null
+    $script:UsageContent = $null
+    $script:SettingsContent = $null
     if ($count -le 0) { throw "UI render produced no controls." }
     Write-Host "Windows bonus-expiry UI smoke test OK ($count controls)."
 }
